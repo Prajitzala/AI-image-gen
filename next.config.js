@@ -15,6 +15,14 @@ const nextConfig = {
         buffer: require.resolve('buffer'),
       };
     }
+    // Exclude v0-image-to-svg-main from compilation
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: [
+        '**/node_modules/**',
+        '**/v0-image-to-svg-main/**',
+      ],
+    };
     return config;
   },
 };
