@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const url = request.nextUrl.clone();
   
   // Intercept any navigation to Stripe and redirect to /app instead
   if (url.href.includes('stripe.com')) {
     return NextResponse.redirect(new URL('/app', request.url));
   }
-  
+
   return NextResponse.next();
 }
 

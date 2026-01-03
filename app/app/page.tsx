@@ -1,25 +1,79 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import ImageUpload from '@/components/ImageUpload';
-import Auth from '@/components/Auth';
 import Wardrobe from '@/components/Wardrobe';
 import { UploadedImage, ClothingItem } from '@/lib/types';
-import { fileToBase64, downloadImage, convertToTransparentPNG } from '@/lib/utils';
+import { fileToBase64, downloadImage, convertToWhiteBackgroundPNG, normalizePoseAPI, extractGarmentAPI } from '@/lib/utils';
 import { config } from '@/lib/config';
-import { Loader2, Download, RefreshCw, User, X } from 'lucide-react';
+import { getSupabaseClient } from '@/lib/supabase/client';
+import { User } from '@supabase/supabase-js';
+import { Loader2, Download, RefreshCw, User as UserIcon, X, LogOut } from 'lucide-react';
 
 export default function Home() {
+  const router = useRouter();
   const [topImage, setTopImage] = useState<UploadedImage | null>(null);
   const [bottomImage, setBottomImage] = useState<UploadedImage | null>(null);
   const [personImage, setPersonImage] = useState<UploadedImage | null>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isProcessingPersonImage, setIsProcessingPersonImage] = useState(false);
+  const [isProcessingTopImage, setIsProcessingTopImage] = useState(false);
+  const [isProcessingBottomImage, setIsProcessingBottomImage] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [showWardrobe, setShowWardrobe] = useState(false);
   const [selectedTop, setSelectedTop] = useState<ClothingItem | null>(null);
   const [selectedBottom, setSelectedBottom] = useState<ClothingItem | null>(null);
+
+  useEffect(() => {
+    if (!config.supabaseEnabled) {
+      setIsCheckingAuth(false);
+      return;
+    }
+    
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setIsCheckingAuth(false);
+      return;
+    }
+
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      setIsCheckingAuth(false);
+      
+      // If no user and Supabase is enabled, redirect to sign-in
+      if (!currentUser) {
+        router.push('/sign-in?redirect=/app');
+      }
+    });
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      
+      // If user signs out, redirect to sign-in
+      if (!currentUser && config.supabaseEnabled) {
+        router.push('/sign-in?redirect=/app');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [router]);
+
+  const handleSignOut = async () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    router.push('/');
+  };
 
   const handleGenerate = async () => {
     if (!topImage || !bottomImage) {
@@ -37,10 +91,11 @@ export default function Home() {
     setGeneratedImageUrl(null);
 
     try {
-      // Convert clothing images to PNG with transparent background
-      // This helps AI better understand clothing edges by removing background noise
-      const topConverted = await convertToTransparentPNG(topImage.file);
-      const bottomConverted = await convertToTransparentPNG(bottomImage.file);
+      // Convert clothing images to PNG with white background
+      // This provides consistent context matching the final output style (white background)
+      // Helps AI better understand clothing in a consistent visual environment
+      const topConverted = await convertToWhiteBackgroundPNG(topImage.file);
+      const bottomConverted = await convertToWhiteBackgroundPNG(bottomImage.file);
       
       // Person image: keep original format (don't remove background - needs full photo context)
       const personBase64 = personImage
@@ -93,7 +148,7 @@ export default function Home() {
   const handleReset = () => {
     setTopImage(null);
     setBottomImage(null);
-    setPersonImage(null);
+    // personImage is preserved - only removed via REMOVE button
     setGeneratedImageUrl(null);
     setError(null);
   };
@@ -102,6 +157,14 @@ export default function Home() {
     if (generatedImageUrl) {
       downloadImage(generatedImageUrl, 'outfit.png');
     }
+  };
+
+  // Helper function to convert data URL to File
+  const dataURLtoFile = async (dataUrl: string, filename: string): Promise<File> => {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const mimeType = dataUrl.split(',')[0].split(':')[1].split(';')[0];
+    return new File([blob], filename, { type: mimeType });
   };
 
   const handleSelectTop = (item: ClothingItem) => {
@@ -154,6 +217,23 @@ export default function Home() {
       });
   };
 
+  // Show loading state while checking authentication
+  if (isCheckingAuth && config.supabaseEnabled) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-black mx-auto mb-4"></div>
+          <p className="text-gray-600">Checking authentication...</p>
+        </div>
+      </main>
+    );
+  }
+
+  // If Supabase is enabled and no user, don't render (will redirect)
+  if (config.supabaseEnabled && !user) {
+    return null;
+  }
+
   return (
     <main className="min-h-screen flex flex-col dotted-background">
       <div className="flex-grow flex items-center justify-center p-8">
@@ -161,29 +241,26 @@ export default function Home() {
         {/* Header */}
           <div className="flex justify-between items-center mb-8">
             <div className="w-10 h-10"></div> {/* Placeholder for spacing */}
-            <h1
-              className="text-6xl font-chango text-center flex-grow tracking-tight leading-none"
-              style={{
-                textShadow: "4px 4px 0px #FFD700",
-                letterSpacing: "1px",
-                color: "#000",
-              }}
-            >
-              AI OUTFIT GENERATOR
-              </h1>
             <div className="w-10 h-10 flex justify-end">
-              {config.supabaseEnabled && (
+              {config.supabaseEnabled && user && (
                 <div className="flex items-center gap-4">
-                  {user && (
+                  <button
+                    onClick={() => setShowWardrobe(!showWardrobe)}
+                    className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow hover:bg-gray-50 transition-colors border-2 border-black"
+                  >
+                    <UserIcon className="w-5 h-5" />
+                    <span className="text-sm font-medium">My Wardrobe</span>
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-700">{user.email}</span>
                     <button
-                      onClick={() => setShowWardrobe(!showWardrobe)}
-                      className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow hover:bg-gray-50 transition-colors border-2 border-black"
+                      onClick={handleSignOut}
+                      className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg shadow hover:bg-gray-50 transition-colors border-2 border-black"
+                      title="Sign Out"
                     >
-                      <User className="w-5 h-5" />
-                      <span className="text-sm font-medium">My Wardrobe</span>
+                      <LogOut className="w-4 h-4" />
                     </button>
-                  )}
-                  <Auth onAuthChange={setUser} />
+                  </div>
                 </div>
               )}
             </div>
@@ -210,7 +287,7 @@ export default function Home() {
               {/* Top Image Upload */}
               {!topImage ? (
                 <div
-                  className="border-4 border-black p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-purple-300 text-center cursor-pointer flex flex-col items-center justify-center"
+                  className="border-4 border-black p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white text-center cursor-pointer flex flex-col items-center justify-center"
                   style={{ height: '200px' }}
                   onClick={() => document.getElementById('top-input')?.click()}
                 >
@@ -219,23 +296,44 @@ export default function Home() {
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"
                     className="hidden"
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        const preview = URL.createObjectURL(file);
-                        setTopImage({
-                          file,
-                          preview,
-                          name: file.name,
-                          size: file.size,
-                        });
+                        setIsProcessingTopImage(true);
+                        setError(null);
+                        try {
+                          // Automatically extract garment from person image
+                          const extractedImageUrl = await extractGarmentAPI(file, 'top');
+                          // Convert data URL to File object
+                          const processedFile = await dataURLtoFile(extractedImageUrl, file.name.replace(/\.[^/.]+$/, '') + '-extracted.png');
+                          const preview = URL.createObjectURL(processedFile);
+                          setTopImage({
+                            file: processedFile,
+                            preview,
+                            name: processedFile.name,
+                            size: processedFile.size,
+                          });
+                        } catch (error: any) {
+                          console.error('Error extracting garment:', error);
+                          setError(error.message || 'Failed to extract garment. Using original image.');
+                          // Fallback to original file if extraction fails
+                          const preview = URL.createObjectURL(file);
+                          setTopImage({
+                            file,
+                            preview,
+                            name: file.name,
+                            size: file.size,
+                          });
+                        } finally {
+                          setIsProcessingTopImage(false);
+                        }
                       }
                     }}
                   />
                   <p className="text-lg font-black text-black">+ TOP IMAGE</p>
                 </div>
               ) : (
-                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-purple-200 overflow-hidden">
+                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                   <div className="bg-black text-white text-center py-2 font-black">TOP IMAGE</div>
                   <div style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
                     <img
@@ -251,7 +349,7 @@ export default function Home() {
                       }
                       setTopImage(null);
                     }}
-                    className="w-full bg-red-300 hover:bg-red-400 border-t-4 border-black p-2 font-black text-sm"
+                    className="w-full bg-white hover:bg-gray-100 border-t-4 border-black p-2 font-black text-sm"
                   >
                     REMOVE
                   </button>
@@ -261,7 +359,7 @@ export default function Home() {
               {/* Bottom Image Upload */}
               {!bottomImage ? (
                 <div
-                  className="border-4 border-black p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-orange-300 text-center cursor-pointer flex flex-col items-center justify-center"
+                  className="border-4 border-black p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white text-center cursor-pointer flex flex-col items-center justify-center"
                   style={{ height: '200px' }}
                   onClick={() => document.getElementById('bottom-input')?.click()}
                 >
@@ -270,30 +368,59 @@ export default function Home() {
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"
                     className="hidden"
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        const preview = URL.createObjectURL(file);
-                        setBottomImage({
-                          file,
-                          preview,
-                          name: file.name,
-                          size: file.size,
-                        });
+                        setIsProcessingBottomImage(true);
+                        setError(null);
+                        try {
+                          // Automatically extract garment from person image
+                          const extractedImageUrl = await extractGarmentAPI(file, 'bottom');
+                          // Convert data URL to File object
+                          const processedFile = await dataURLtoFile(extractedImageUrl, file.name.replace(/\.[^/.]+$/, '') + '-extracted.png');
+                          const preview = URL.createObjectURL(processedFile);
+                          setBottomImage({
+                            file: processedFile,
+                            preview,
+                            name: processedFile.name,
+                            size: processedFile.size,
+                          });
+                        } catch (error: any) {
+                          console.error('Error extracting garment:', error);
+                          setError(error.message || 'Failed to extract garment. Using original image.');
+                          // Fallback to original file if extraction fails
+                          const preview = URL.createObjectURL(file);
+                          setBottomImage({
+                            file,
+                            preview,
+                            name: file.name,
+                            size: file.size,
+                          });
+                        } finally {
+                          setIsProcessingBottomImage(false);
+                        }
                       }
                     }}
                   />
                   <p className="text-lg font-black text-black">+ BOTTOM IMAGE</p>
                 </div>
               ) : (
-                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-orange-200 overflow-hidden">
+                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                   <div className="bg-black text-white text-center py-2 font-black">BOTTOM IMAGE</div>
                   <div style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
-                    <img
-                      src={bottomImage.preview}
-                      alt="Bottom"
-                      className="max-w-full max-h-full object-contain"
-                    />
+                    {isProcessingBottomImage ? (
+                      <div className="text-center">
+                        <div className="inline-block border-4 border-black p-3 bg-white shadow-[5px_5px_0px_0px_rgba(0,0,0)] animate-pulse">
+                          <p className="text-black font-black text-sm">EXTRACTING GARMENT...</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <img
+                        src={bottomImage.preview}
+                        alt="Bottom"
+                        className="max-w-full max-h-full object-contain"
+                      />
+                    )}
                   </div>
                   <button
                     onClick={() => {
@@ -302,7 +429,7 @@ export default function Home() {
                       }
                       setBottomImage(null);
                     }}
-                    className="w-full bg-red-300 hover:bg-red-400 border-t-4 border-black p-2 font-black text-sm"
+                    className="w-full bg-white hover:bg-gray-100 border-t-4 border-black p-2 font-black text-sm"
                   >
                     REMOVE
                   </button>
@@ -314,7 +441,7 @@ export default function Home() {
             <div className="col-span-1 lg:col-span-2 flex flex-col gap-4">
               {/* Full Photo Upload / Generated Outfit Display */}
               {generatedImageUrl ? (
-                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-green-200 overflow-hidden">
+                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                   <div className="bg-black text-white text-center py-2 font-black text-xl">FULL PHOTO</div>
                   <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
                     <img
@@ -326,7 +453,7 @@ export default function Home() {
                 </div>
               ) : !personImage ? (
                 <div
-                  className="border-4 border-black p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-green-300 text-center cursor-pointer flex flex-col items-center justify-center"
+                  className="border-4 border-black p-4 shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white text-center cursor-pointer flex flex-col items-center justify-center"
                   style={{ height: '300px' }}
                   onClick={() => document.getElementById('full-input')?.click()}
                 >
@@ -335,16 +462,37 @@ export default function Home() {
                     type="file"
                     accept="image/jpeg,image/png,image/webp,image/gif"
                     className="hidden"
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        const preview = URL.createObjectURL(file);
-                        setPersonImage({
-                          file,
-                          preview,
-                          name: file.name,
-                          size: file.size,
-                        });
+                        setIsProcessingPersonImage(true);
+                        setError(null);
+                        try {
+                          // Normalize pose of person photo using Gemini API with white background
+                          const imageUrl = await normalizePoseAPI(file);
+                          // Convert data URL to File object
+                          const processedFile = await dataURLtoFile(imageUrl, file.name.replace(/\.[^/.]+$/, '') + '-white-bg.png');
+                          const preview = URL.createObjectURL(processedFile);
+                          setPersonImage({
+                            file: processedFile,
+                            preview,
+                            name: processedFile.name,
+                            size: processedFile.size,
+                          });
+                        } catch (error: any) {
+                          console.error('Error processing person image:', error);
+                          setError(error.message || 'Failed to normalize pose. Please try again.');
+                          // Fallback to original file if processing fails
+                          const preview = URL.createObjectURL(file);
+                          setPersonImage({
+                            file,
+                            preview,
+                            name: file.name,
+                            size: file.size,
+                          });
+                        } finally {
+                          setIsProcessingPersonImage(false);
+                        }
                       }
                     }}
                   />
@@ -352,12 +500,18 @@ export default function Home() {
                   <p className="text-sm font-bold text-black mt-2">JPG, PNG, WebP, GIF</p>
                 </div>
               ) : (
-                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-green-200 overflow-hidden">
+                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                   <div className="bg-black text-white text-center py-2 font-black text-xl">FULL PHOTO</div>
                   <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
-                    {isGenerating ? (
+                    {isProcessingPersonImage ? (
                       <div className="text-center">
-                        <div className="inline-block border-4 border-black p-3 bg-yellow-300 shadow-[5px_5px_0px_0px_rgba(0,0,0)] animate-pulse">
+                        <div className="inline-block border-4 border-black p-3 bg-white shadow-[5px_5px_0px_0px_rgba(0,0,0)] animate-pulse">
+                          <p className="text-black font-black text-xl">REMOVING BACKGROUND...</p>
+                        </div>
+                      </div>
+                    ) : isGenerating ? (
+                      <div className="text-center">
+                        <div className="inline-block border-4 border-black p-3 bg-white shadow-[5px_5px_0px_0px_rgba(0,0,0)] animate-pulse">
                           <p className="text-black font-black text-xl">GENERATING...</p>
                         </div>
                       </div>
@@ -376,7 +530,7 @@ export default function Home() {
                       }
                       setPersonImage(null);
                     }}
-                    className="w-full bg-red-300 hover:bg-red-400 border-t-4 border-black p-2 font-black text-sm"
+                    className="w-full bg-white hover:bg-gray-100 border-t-4 border-black p-2 font-black text-sm"
                   >
                     REMOVE
                   </button>
@@ -386,7 +540,7 @@ export default function Home() {
               {/* Generate Button */}
               {!generatedImageUrl && personImage && topImage && bottomImage && (
                 <div
-                  className="w-full border-4 border-black p-4 bg-yellow-300 shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full border-4 border-black p-4 bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={handleGenerate}
                 >
                   {isGenerating ? (
@@ -407,7 +561,7 @@ export default function Home() {
               <div className="flex gap-4">
                 {generatedImageUrl && (
                   <div
-                    className="flex-1 border-4 border-black p-3 bg-cyan-300 shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center"
+                    className="flex-1 border-4 border-black p-3 bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center"
                     onClick={handleDownload}
                   >
                     <div className="flex items-center">
@@ -417,7 +571,7 @@ export default function Home() {
                   </div>
                 )}
                 <div
-                  className={`${generatedImageUrl ? 'flex-1' : 'w-full'} border-4 border-black p-3 bg-green-300 shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center`}
+                  className={`${generatedImageUrl ? 'flex-1' : 'w-full'} border-4 border-black p-3 bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center`}
                   onClick={handleReset}
                 >
                   <div className="flex items-center">
@@ -428,7 +582,7 @@ export default function Home() {
               </div>
 
               {error && (
-                <div className="p-3 border-4 border-black shadow-[5px_5px_0px_0px_rgba(0,0,0)] bg-red-300 text-black font-black">
+                <div className="p-3 border-4 border-black shadow-[5px_5px_0px_0px_rgba(0,0,0)] bg-white text-black font-black">
                   {error}
                 </div>
             )}
@@ -440,7 +594,7 @@ export default function Home() {
             {/* Left Column - Input Images */}
             <div className="flex flex-col gap-4">
                 {topImage && (
-                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-purple-200 overflow-hidden">
+                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                   <div className="bg-black text-white text-center py-2 font-black">TOP IMAGE</div>
                   <div style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
                     <img
@@ -452,7 +606,7 @@ export default function Home() {
                   </div>
                 )}
                 {bottomImage && (
-                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-orange-200 overflow-hidden">
+                <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                   <div className="bg-black text-white text-center py-2 font-black">BOTTOM IMAGE</div>
                   <div style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
                     <img
@@ -468,7 +622,7 @@ export default function Home() {
             {/* Right Column - Generated Result in FULL PHOTO container */}
             <div className="col-span-1 lg:col-span-2 flex flex-col gap-4">
               {/* Full Photo Container with Generated Outfit */}
-              <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-green-200 overflow-hidden">
+              <div className="border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0)] bg-white overflow-hidden">
                 <div className="bg-black text-white text-center py-2 font-black text-xl">FULL PHOTO</div>
                 <div style={{ height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} className="p-4">
                   <img
@@ -482,7 +636,7 @@ export default function Home() {
               {/* Action Buttons */}
               <div className="flex gap-4">
                 <div
-                  className="flex-1 border-4 border-black p-3 bg-cyan-300 shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center"
+                  className="flex-1 border-4 border-black p-3 bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center"
                   onClick={handleDownload}
                 >
                   <div className="flex items-center">
@@ -491,7 +645,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div
-                  className="flex-1 border-4 border-black p-3 bg-green-300 shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center"
+                  className="flex-1 border-4 border-black p-3 bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0)] hover:translate-x-[3px] hover:translate-y-[3px] transition-all cursor-pointer flex justify-center items-center"
                   onClick={handleReset}
                 >
                   <div className="flex items-center">

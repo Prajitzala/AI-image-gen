@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { config } from '@/lib/config';
 
-// Initialize Google Generative AI
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '');
+// Initialize Google GenAI
+const ai = new GoogleGenAI({ 
+  apiKey: process.env.GOOGLE_AI_API_KEY || '' 
+});
 
 // Replicate code (commented out)
 // import Replicate from 'replicate';
@@ -106,12 +108,15 @@ export async function POST(request: NextRequest) {
       return normalized;
     };
 
-    // Convert base64 images to format expected by Google Generative AI
-    const imageParts: Array<{ inlineData: { data: string; mimeType: string } }> = [];
+    // Construct the prompt
+    const prompt = `Create a new image by combining the elements from the provided images. Take the top clothing item from image 1 and the bottom clothing item from image 2, and place them naturally onto the body in image 3 so it looks like the person is wearing the selected outfit. Fit to body shape and pose, preserve garment proportions and textures, match lighting and shadows, handle occlusion by hair and arms. CRITICAL: The background must be completely white (#FFFFFF) - do not use black, transparent, or any other background color. Replace any existing background with solid white. Do not change the person identity or add accessories.`;
+
+    // Build contents array with images and text for new SDK
+    const contents: Array<{ inlineData?: { data: string; mimeType: string }; text?: string }> = [];
     
     // Add person image first if provided (image 3)
     if (personImage) {
-      imageParts.push({
+      contents.push({
         inlineData: {
           data: cleanBase64(personImage.data),
           mimeType: validateMimeType(personImage.mimeType),
@@ -120,7 +125,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Add top image (image 1)
-    imageParts.push({
+    contents.push({
       inlineData: {
         data: cleanBase64(topImage.data),
         mimeType: validateMimeType(topImage.mimeType),
@@ -128,28 +133,26 @@ export async function POST(request: NextRequest) {
     });
     
     // Add bottom image (image 2)
-    imageParts.push({
+    contents.push({
       inlineData: {
         data: cleanBase64(bottomImage.data),
         mimeType: validateMimeType(bottomImage.mimeType),
       },
     });
-
-    // Construct the prompt
-    const prompt = `Create a new image by combining the elements from the provided images. Take the top clothing item from image 1 and the bottom clothing item from image 2, and place them naturally onto the body in image 3 so it looks like the person is wearing the selected outfit. Fit to body shape and pose, preserve garment proportions and textures, match lighting and shadows, handle occlusion by hair and arms. CRITICAL: The background must be completely white (#FFFFFF) - do not use black, transparent, or any other background color. Replace any existing background with solid white. Do not change the person identity or add accessories.`;
-
-    // Call Google Generative AI API
-    // Note: gemini-2.5-flash-image model generates images by default
-    const model = genAI.getGenerativeModel({ model: config.googleModel });
     
-    // Generate content with images and prompt
-    // Pass parts as array format
-    let result;
+    // Add prompt as text
+    contents.push({ text: prompt });
+
+    // Call Google GenAI API using the new SDK
+    let response;
     try {
-      result = await model.generateContent([
-        { text: prompt },
-        ...imageParts,
-      ]);
+      response = await ai.models.generateContent({
+        model: config.googleModel,
+        contents: contents,
+        config: {
+          responseModalities: ['IMAGE'], // Request image response
+        },
+      });
     } catch (apiError: any) {
       // Handle specific Google API errors
       const errorMessage = apiError?.message || 'Unknown API error';
@@ -191,27 +194,14 @@ export async function POST(request: NextRequest) {
       }
       
       // Generic API error
-      console.error('Google Generative AI API error:', apiError);
+      console.error('Google GenAI API error:', apiError);
       return NextResponse.json(
         { error: `API error: ${errorMessage}. Please try again later.` },
         { status: 500 }
       );
     }
     
-    const response = await result.response;
-    
-    // Check for blocked content or safety issues in response
-    if (response.promptFeedback) {
-      const feedback = response.promptFeedback;
-      if (feedback.blockReason) {
-        return NextResponse.json(
-          { error: `Content blocked: ${feedback.blockReason}. Please try different images.` },
-          { status: 400 }
-        );
-      }
-    }
-    
-    // Extract image from response
+    // Extract image from response (matching reference pattern)
     const candidates = response.candidates;
     if (!candidates || candidates.length === 0) {
       console.error('No candidates in response:', response);
@@ -238,20 +228,24 @@ export async function POST(request: NextRequest) {
     const content = candidates[0].content;
     let imageUrl: string | null = null;
     
-    // Try to extract image from parts
-    if (content.parts) {
+    // Try to extract image from parts (matching reference pattern)
+    if (content && content.parts) {
       for (const part of content.parts) {
-        if ('inlineData' in part && part.inlineData) {
-          // Response contains base64 image data
-          imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-          break;
-        } else if ('text' in part && part.text) {
+        // Check for text first (as in reference)
+        if (part.text) {
           // If response contains a URL in text
           const urlMatch = part.text.match(/https?:\/\/[^\s]+/);
           if (urlMatch) {
             imageUrl = urlMatch[0];
             break;
           }
+        } 
+        // Check for inlineData (image data) - matching reference pattern
+        else if (part.inlineData) {
+          // Response contains base64 image data
+          const imageData = part.inlineData.data;
+          imageUrl = `data:${part.inlineData.mimeType};base64,${imageData}`;
+          break;
         }
       }
     }

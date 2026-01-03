@@ -22,7 +22,7 @@ export default function ImageUpload({
   value,
   onChange,
   required = false,
-  bgColor = 'bg-purple-300',
+  bgColor = 'bg-white',
   containerHeight = '200px',
 }: ImageUploadProps) {
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +89,7 @@ export default function ImageUpload({
         </div>
         <button
           onClick={handleRemove}
-          className="w-full bg-red-300 hover:bg-red-400 border-t-4 border-black p-2 font-black text-sm"
+          className="w-full bg-white hover:bg-gray-100 border-t-4 border-black p-2 font-black text-sm"
         >
           REMOVE
         </button>
@@ -113,7 +113,7 @@ export default function ImageUpload({
       </div>
 
       {error && (
-        <div className="mt-2 p-3 border-4 border-black shadow-[5px_5px_0px_0px_rgba(0,0,0)] bg-red-300 text-black font-black">
+        <div className="mt-2 p-3 border-4 border-black shadow-[5px_5px_0px_0px_rgba(0,0,0)] bg-white text-black font-black">
           {error}
         </div>
       )}
