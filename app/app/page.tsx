@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import ImageUpload from '@/components/ImageUpload';
 import Wardrobe from '@/components/Wardrobe';
 import { UploadedImage, ClothingItem } from '@/lib/types';
-import { fileToBase64, downloadImage, convertToWhiteBackgroundPNG, normalizePoseAPI, extractGarmentAPI } from '@/lib/utils';
+import { fileToBase64, downloadImage, convertToWhiteBackgroundPNG, normalizePoseAPI, extractGarmentAPI, compressImage } from '@/lib/utils';
 import { config } from '@/lib/config';
 import { getSupabaseClient } from '@/lib/supabase/client';
 import { User } from '@supabase/supabase-js';
@@ -91,22 +91,18 @@ export default function Home() {
     setGeneratedImageUrl(null);
 
     try {
-      // Convert clothing images to PNG with white background
+      // Convert clothing images to PNG with white background (with compression)
       // This provides consistent context matching the final output style (white background)
       // Helps AI better understand clothing in a consistent visual environment
-      const topConverted = await convertToWhiteBackgroundPNG(topImage.file);
-      const bottomConverted = await convertToWhiteBackgroundPNG(bottomImage.file);
+      // Max dimensions: 1024x1024 to reduce payload size
+      const topConverted = await convertToWhiteBackgroundPNG(topImage.file, 1024, 1024);
+      const bottomConverted = await convertToWhiteBackgroundPNG(bottomImage.file, 1024, 1024);
       
-      // Person image: keep original format (don't remove background - needs full photo context)
-      const personBase64 = personImage
-        ? await fileToBase64(personImage.file)
+      // Person image: compress and resize to reduce payload size
+      // Keep original format but compress to reduce size (max 1024x1024, quality 0.85)
+      const personCompressed = personImage
+        ? await compressImage(personImage.file, 1024, 1024, 0.85)
         : undefined;
-
-      // Helper function to get MIME type from file
-      const getMimeType = (file: File): string => {
-        // Preserve the original MIME type, defaulting to JPEG for compatibility
-        return file.type || 'image/jpeg';
-      };
 
       const response = await fetch('/api/generate-outfit', {
         method: 'POST',
@@ -122,10 +118,10 @@ export default function Home() {
             data: bottomConverted.data,
             mimeType: bottomConverted.mimeType, // Always PNG now
           },
-          personImage: personBase64
+          personImage: personCompressed
             ? {
-                data: personBase64,
-                mimeType: getMimeType(personImage.file), // Keep original format
+                data: personCompressed.data,
+                mimeType: personCompressed.mimeType, // Compressed format (JPEG or PNG)
               }
             : undefined,
         }),

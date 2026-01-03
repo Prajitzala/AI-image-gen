@@ -6,7 +6,103 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Converts a File object to a base64 string
+ * Compresses and resizes an image to reduce file size
+ * @param file - The image file to compress
+ * @param maxWidth - Maximum width in pixels (default: 1024)
+ * @param maxHeight - Maximum height in pixels (default: 1024)
+ * @param quality - JPEG quality 0-1 (default: 0.85)
+ * @returns Promise with compressed image data and mimeType
+ */
+export function compressImage(
+  file: File,
+  maxWidth: number = 1024,
+  maxHeight: number = 1024,
+  quality: number = 0.85
+): Promise<{ data: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    if (!ctx) {
+      reject(new Error('Canvas context not available'));
+      return;
+    }
+
+    img.onload = () => {
+      try {
+        // Calculate new dimensions while maintaining aspect ratio
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          const aspectRatio = width / height;
+          if (width > height) {
+            width = Math.min(width, maxWidth);
+            height = width / aspectRatio;
+          } else {
+            height = Math.min(height, maxHeight);
+            width = height * aspectRatio;
+          }
+        }
+
+        // Set canvas dimensions
+        canvas.width = width;
+        canvas.height = height;
+
+        // Draw and compress image
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Determine output format - use JPEG for better compression unless it's PNG with transparency
+        const isPNG = file.type === 'image/png';
+        const outputFormat = isPNG ? 'image/png' : 'image/jpeg';
+        const outputQuality = isPNG ? 0.9 : quality; // PNG uses quality for compression level
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('Failed to compress image'));
+              return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = reader.result as string;
+              const base64 = result.split(',')[1];
+              resolve({
+                data: base64,
+                mimeType: outputFormat,
+              });
+            };
+            reader.onerror = () => reject(new Error('Failed to read compressed image'));
+            reader.readAsDataURL(blob);
+          },
+          outputFormat,
+          outputQuality
+        );
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    img.onerror = () => {
+      reject(new Error('Failed to load image'));
+    };
+
+    // Load image from file
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (e.target?.result) {
+        img.src = e.target.result as string;
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Converts a File object to a base64 string (uncompressed)
  */
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -20,6 +116,23 @@ export function fileToBase64(file: File): Promise<string> {
     };
     reader.onerror = (error) => reject(error);
   });
+}
+
+/**
+ * Converts a File object to a compressed base64 string
+ * @param file - The image file to convert
+ * @param maxWidth - Maximum width in pixels (default: 1024)
+ * @param maxHeight - Maximum height in pixels (default: 1024)
+ * @param quality - JPEG quality 0-1 (default: 0.85)
+ * @returns Promise with base64 string
+ */
+export function fileToBase64Compressed(
+  file: File,
+  maxWidth: number = 1024,
+  maxHeight: number = 1024,
+  quality: number = 0.85
+): Promise<string> {
+  return compressImage(file, maxWidth, maxHeight, quality).then((result) => result.data);
 }
 
 /**
@@ -175,8 +288,13 @@ export function convertToTransparentPNG(file: File): Promise<{ data: string; mim
  * Converts any image to PNG format with white background
  * Removes background and replaces it with white (#FFFFFF) to match final output style
  * This helps AI better understand clothing in consistent context
+ * Includes compression to reduce payload size
  */
-export function convertToWhiteBackgroundPNG(file: File): Promise<{ data: string; mimeType: string }> {
+export function convertToWhiteBackgroundPNG(
+  file: File,
+  maxWidth: number = 1024,
+  maxHeight: number = 1024
+): Promise<{ data: string; mimeType: string }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const canvas = document.createElement('canvas');
@@ -189,16 +307,31 @@ export function convertToWhiteBackgroundPNG(file: File): Promise<{ data: string;
 
     img.onload = () => {
       try {
-        // Set canvas size to match image
-        canvas.width = img.width;
-        canvas.height = img.height;
+        // Calculate new dimensions while maintaining aspect ratio
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          const aspectRatio = width / height;
+          if (width > height) {
+            width = Math.min(width, maxWidth);
+            height = width / aspectRatio;
+          } else {
+            height = Math.min(height, maxHeight);
+            width = height * aspectRatio;
+          }
+        }
+
+        // Set canvas size to resized dimensions
+        canvas.width = width;
+        canvas.height = height;
 
         // Fill canvas with white background first
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Draw the image onto canvas
-        ctx.drawImage(img, 0, 0);
+        // Draw the image onto canvas (resized)
+        ctx.drawImage(img, 0, 0, width, height);
 
         // Get image data
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -235,7 +368,8 @@ export function convertToWhiteBackgroundPNG(file: File): Promise<{ data: string;
         // Put processed image data back
         ctx.putImageData(imageData, 0, 0);
 
-        // Convert canvas to PNG base64
+        // Convert canvas to PNG base64 with compression
+        // Using lower quality for PNG compression (0.8 instead of 0.95) to reduce size
         canvas.toBlob(
           (blob) => {
             if (!blob) {
@@ -256,7 +390,7 @@ export function convertToWhiteBackgroundPNG(file: File): Promise<{ data: string;
             reader.readAsDataURL(blob);
           },
           'image/png',
-          0.95 // Quality (0-1, PNG is lossless but this affects compression)
+          0.8 // Reduced quality for better compression (PNG compression level)
         );
       } catch (error) {
         reject(error);
@@ -454,9 +588,9 @@ export async function removeBackgroundAPI(
   customBackgroundColor?: string
 ): Promise<string> {
   try {
-    // Convert file to base64 with MIME type
-    const base64 = await fileToBase64(image);
-    const dataUrl = `data:${image.type};base64,${base64}`;
+    // Compress image before sending to reduce payload size
+    const compressed = await compressImage(image, 1024, 1024, 0.85);
+    const dataUrl = `data:${compressed.mimeType};base64,${compressed.data}`;
     
     // Prepare request body
     const requestBody: {
@@ -466,7 +600,7 @@ export async function removeBackgroundAPI(
     } = {
       image: {
         data: dataUrl,
-        mimeType: image.type || 'image/jpeg',
+        mimeType: compressed.mimeType,
       },
       backgroundType,
     };
@@ -549,9 +683,9 @@ export async function extractGarmentAPI(
   garmentType: 'top' | 'bottom' = 'top'
 ): Promise<string> {
   try {
-    // Convert file to base64 with MIME type
-    const base64 = await fileToBase64(image);
-    const dataUrl = `data:${image.type};base64,${base64}`;
+    // Compress image before sending to reduce payload size
+    const compressed = await compressImage(image, 1024, 1024, 0.85);
+    const dataUrl = `data:${compressed.mimeType};base64,${compressed.data}`;
     
     // Prepare request body
     const requestBody: {
@@ -560,7 +694,7 @@ export async function extractGarmentAPI(
     } = {
       image: {
         data: dataUrl,
-        mimeType: image.type || 'image/jpeg',
+        mimeType: compressed.mimeType,
       },
       garmentType,
     };
