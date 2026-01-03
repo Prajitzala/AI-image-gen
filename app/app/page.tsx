@@ -131,10 +131,28 @@ export default function Home() {
         }),
       });
 
-      const data = await response.json();
+      // Safely parse JSON response
+      let data: any;
+      const contentType = response.headers.get('content-type');
+      
+      // Read response as text first so we can handle both JSON and non-JSON responses
+      const text = await response.text();
+      
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          // Try to parse as JSON
+          data = JSON.parse(text);
+        } catch (jsonError: any) {
+          // If JSON parsing fails, throw error with the text content
+          throw new Error(text || 'Invalid response from server');
+        }
+      } else {
+        // If not JSON, throw error with text content
+        throw new Error(text || `Server error: ${response.status} ${response.statusText}`);
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to generate outfit');
+        throw new Error(data?.error || `Failed to generate outfit: ${response.status} ${response.statusText}`);
       }
 
       setGeneratedImageUrl(data.imageUrl);

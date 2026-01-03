@@ -417,6 +417,31 @@ export function removePersonBackground(file: File): Promise<File> {
 }
 
 /**
+ * Safely parses a JSON response from a fetch Response object
+ * Handles cases where the response might not be valid JSON
+ */
+async function safeParseJSON(response: Response): Promise<any> {
+  const contentType = response.headers.get('content-type');
+  
+  // Read response as text first so we can handle both JSON and non-JSON responses
+  const text = await response.text();
+  
+  // Check if response is JSON
+  if (contentType && contentType.includes('application/json')) {
+    try {
+      // Try to parse as JSON
+      return JSON.parse(text);
+    } catch (jsonError: any) {
+      // If JSON parsing fails, throw error with the text content
+      throw new Error(text || 'Invalid JSON response from server');
+    }
+  } else {
+    // If not JSON, throw error with text content
+    throw new Error(text || `Server error: ${response.status} ${response.statusText}`);
+  }
+}
+
+/**
  * Removes background from an image using Gemini API
  * @param image - The image file to process
  * @param backgroundType - Type of background: 'transparent', 'white', or 'custom'
@@ -459,10 +484,10 @@ export async function removeBackgroundAPI(
       body: JSON.stringify(requestBody),
     });
 
-    const data = await response.json();
+    const data = await safeParseJSON(response);
 
     if (!response.ok) {
-      throw new Error(data.error || 'Failed to remove background');
+      throw new Error(data?.error || `Failed to remove background: ${response.status} ${response.statusText}`);
     }
 
     return data.imageUrl;
@@ -501,10 +526,10 @@ export async function normalizePoseAPI(image: File): Promise<string> {
       body: JSON.stringify(requestBody),
     });
 
-    const data = await response.json();
+    const data = await safeParseJSON(response);
 
     if (!response.ok) {
-      throw new Error(data.error || 'Failed to normalize pose');
+      throw new Error(data?.error || `Failed to normalize pose: ${response.status} ${response.statusText}`);
     }
 
     return data.imageUrl;
@@ -549,10 +574,10 @@ export async function extractGarmentAPI(
       body: JSON.stringify(requestBody),
     });
 
-    const data = await response.json();
+    const data = await safeParseJSON(response);
 
     if (!response.ok) {
-      throw new Error(data.error || 'Failed to extract garment');
+      throw new Error(data?.error || `Failed to extract garment: ${response.status} ${response.statusText}`);
     }
 
     return data.imageUrl;
