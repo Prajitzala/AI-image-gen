@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LoginForm } from '@/components/login-form';
@@ -8,7 +8,9 @@ import { getSupabaseClient } from '@/lib/supabase/client';
 import { config } from '@/lib/config';
 import { User } from '@supabase/supabase-js';
 
-export default function SignInPage() {
+export const dynamic = 'force-dynamic';
+
+function SignInContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [user, setUser] = useState<User | null>(null);
@@ -107,6 +109,23 @@ export default function SignInPage() {
         <LoginForm onAuthChange={handleAuthChange} />
       </div>
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-muted">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-foreground mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      }
+    >
+      <SignInContent />
+    </Suspense>
   );
 }
 
